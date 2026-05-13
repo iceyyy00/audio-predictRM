@@ -1,0 +1,5 @@
+distortion
+reverb
+compression
+noise
+other
