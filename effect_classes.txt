@@ -3,3 +3,8 @@ reverb
 compression
 noise
 other
+band-pass
+delay
+high-pass
+low-pass
+dry

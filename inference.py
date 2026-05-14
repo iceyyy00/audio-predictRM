@@ -4,10 +4,10 @@ import numpy as np
 import sys
 import os
 
-MODEL_PATH = 'trained_model.keras'
-EFFECT_CLASSES_FILE = 'effect_classes.txt'
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'trained_model.keras')
+EFFECT_CLASSES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'effect_classes.txt')
 
-print("Context: pendeteksian efek audio pada rekaman listening pendidikan.")
+print("Context: pendeteksian efek audio dari dataset lokal.")
 print("Loading trained model...")
 model = tf.keras.models.load_model(MODEL_PATH)
 
@@ -66,13 +66,20 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         predict_audio(sys.argv[1])
     else:
-        dataset_path = os.path.join('dataset', 'ODAQ', 'ODAQ_training')
+        # Scan test_audio folder
         audio_files = []
-        for root, _, files in os.walk(dataset_path):
-            for f in files:
-                if f.lower().endswith('.wav'):
-                    audio_files.append(os.path.join(root, f))
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        test_dir = os.path.join(base_dir, "test_audio")
+        
+        if os.path.exists(test_dir):
+            for f in os.listdir(test_dir):
+                if f.lower().endswith(('.wav', '.mp3', '.flac')):
+                    audio_files.append(os.path.join(test_dir, f))
+        else:
+            print("Folder test_audio tidak ditemukan.")
+            pass
 
-        for f in audio_files[:10]:
+        # Test on all files in test_audio
+        for f in audio_files:
             predict_audio(f)
 

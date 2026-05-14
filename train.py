@@ -1,20 +1,16 @@
 import argparse
 import os
-import re
 import sys
 import numpy as np
 import tensorflow as tf
-import xml.etree.ElementTree as ET
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, f1_score, precision_score, recall_score, multilabel_confusion_matrix
 
 from preprocessing import preprocess_audio
 from cnnModels import create_cnn_model
 
 # Paths
-BASE_DIR = r"c:\Users\ASUS\Documents\ProjectRM"
-DATA_ROOT = os.path.join(BASE_DIR, "dataset", "ODAQ")
-TRAIN_DIR = os.path.join(DATA_ROOT, "ODAQ_training")
-LISTENING_DIR = os.path.join(DATA_ROOT, "ODAQ_listening_test")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, "trained_model.keras")
 
 EFFECT_CLASSES_FILE = os.path.join(BASE_DIR, "effect_classes.txt")
@@ -36,88 +32,48 @@ def load_effect_classes():
 
 EFFECT_CLASSES = load_effect_classes()
 
-KEYWORD_TO_EFFECT = {
-    "distort": "distortion",
-    "crunch": "distortion",
-    "hiss": "distortion",
-    "reverb": "reverb",
-    "echo": "reverb",
-    "compression": "compression",
-    "compress": "compression",
-    "pump": "compression",
-    "pumping": "compression",
-    "noise": "noise"
-}
+# Update EFFECT_CLASSES with all effects from dataset folders
+dataset_dirs = [d for d in os.listdir(BASE_DIR) if d.startswith("dataset_") and os.path.isdir(os.path.join(BASE_DIR, d))]
+for d in dataset_dirs:
+    effect = d.replace("dataset_", "").lower()
+    if effect not in EFFECT_CLASSES:
+        EFFECT_CLASSES.append(effect)
+
+# Add 'dry' if dry_audio exists
+if os.path.exists(os.path.join(BASE_DIR, "dry_audio")):
+    if "dry" not in EFFECT_CLASSES:
+        EFFECT_CLASSES.append("dry")
+
+def build_label_map_from_folders():
+    print("Building labels from local dataset folders...")
+    label_map = {}
+
+    # Load from dataset_ folders
+    dataset_dirs = [d for d in os.listdir(BASE_DIR) if d.startswith("dataset_") and os.path.isdir(os.path.join(BASE_DIR, d))]
+    for d in dataset_dirs:
+        effect = d.replace("dataset_", "").lower()
+        path_dir = os.path.join(BASE_DIR, d)
+        for file in os.listdir(path_dir):
+            if file.lower().endswith(('.wav', '.mp3', '.flac')):  # assuming audio files
+                full_path = os.path.join(path_dir, file)
+                label_map[file] = (full_path, {effect})
+
+    # Load from dry_audio as 'dry'
+    dry_dir = os.path.join(BASE_DIR, "dry_audio")
+    if os.path.exists(dry_dir):
+        for file in os.listdir(dry_dir):
+            if file.lower().endswith(('.wav', '.mp3', '.flac')):
+                full_path = os.path.join(dry_dir, file)
+                label_map[file] = (full_path, {"dry"})
+
+    return label_map
 
 
-def extract_effects_from_comment(comment: str):
-    label_set = set()
-    text = comment.lower() if comment else ""
-
-    for kw, effect in KEYWORD_TO_EFFECT.items():
-        if kw in text:
-            label_set.add(effect)
-
-    if not label_set and text.strip():
-        label_set.add("other")
-
-    return label_set
-
-
-def load_labels_from_xml(xml_dir):
-    labels = {}
-
-    for fname in os.listdir(xml_dir):
-        if not fname.lower().endswith(".xml"):
-            continue
-
-        path = os.path.join(xml_dir, fname)
-        try:
-            tree = ET.parse(path)
-            root = tree.getroot()
-
-            for test_file in root.iter("testFile"):
-                audio_name = test_file.attrib.get("fileName")
-                comment = test_file.attrib.get("comment", "")
-                if not audio_name or audio_name.lower() == "reference.wav":
-                    continue
-
-                effect_set = extract_effects_from_comment(comment)
-
-                if not effect_set:
-                    continue
-
-                labels.setdefault(audio_name, set()).update(effect_set)
-
-        except Exception as e:
-            print(f"Warning: gagal parsing XML {path}:", e)
-
-    return labels
-
-
-def construct_label_map(source):
-    print("Membangun label dari metadata ODAQ untuk konteks listening pendidikan...")
-    return load_labels_from_xml(LISTENING_DIR)
-
-
-def find_audio_path(audio_name, source=None):
-    for root, _, files in os.walk(TRAIN_DIR):
-        if audio_name in files:
-            return os.path.join(root, audio_name)
-
-    return None
-
-
-def load_dataset(label_map, source):
-    print("Memuat dataset")
+def load_dataset(label_map):
+    print("Loading dataset from local folders")
     X, y = [], []
 
-    for audio_name, effects in label_map.items():
-        path = find_audio_path(audio_name)
-        if not path:
-            print(f"Skip tidak ada file: {audio_name}")
-            continue
-
+    for audio_name, (path, effects) in label_map.items():
         try:
             mel = preprocess_audio(path)
             X.append(mel)
@@ -133,7 +89,7 @@ def load_dataset(label_map, source):
             print(f"Loaded: {audio_name} => {sorted(list(effects))}")
 
         except Exception as e:
-            print(f"Error load audio {audio_name}:", e)
+            print(f"Error loading audio {audio_name}:", e)
 
     X = np.array(X)
     y = np.array(y)
@@ -141,18 +97,18 @@ def load_dataset(label_map, source):
     return X, y
 
 
-def run_training(source, epochs, batch_size, learning_rate):
-    print("Konteks penelitian: pendeteksian efek audio pada rekaman listening pendidikan.")
-    print("Kelas efek yang digunakan:", EFFECT_CLASSES)
+def run_training(epochs, batch_size, learning_rate):
+    print("Training model for audio effect detection from local datasets.")
+    print("Effect classes:", EFFECT_CLASSES)
 
-    label_map = construct_label_map(source)
+    label_map = build_label_map_from_folders()
     if not label_map:
-        raise RuntimeError("Dataset kosong, tidak ada label ditemukan untuk sumber yang dipilih.")
+        raise RuntimeError("Dataset kosong, tidak ada file audio ditemukan di folder dataset.")
 
-    X, y = load_dataset(label_map, source)
+    X, y = load_dataset(label_map)
 
     if len(X) == 0 or len(y) == 0:
-        raise RuntimeError("Dataset kosong, pastikan ODAQ dataset sudah terdownload dan label dapat dibaca.")
+        raise RuntimeError("Dataset kosong, pastikan ada file audio di folder dataset.")
 
     print("Dataset shape:", X.shape)
     print("Labels shape:", y.shape)
@@ -176,10 +132,38 @@ def run_training(source, epochs, batch_size, learning_rate):
         validation_data=(X_val, y_val)
     )
 
+    # Evaluasi model
+    print("\nEvaluating model on validation set...")
+    y_pred = model.predict(X_val)
+    y_pred_binary = (y_pred > 0.5).astype(int)
+
+    print("Classification Report:")
+    print(classification_report(y_val, y_pred_binary, target_names=EFFECT_CLASSES, zero_division=0))
+
+    # Confusion Matrix per class
+    print("\nConfusion Matrices per class:")
+    mcm = multilabel_confusion_matrix(y_val, y_pred_binary)
+    for i, matrix in enumerate(mcm):
+        print(f"\n{EFFECT_CLASSES[i]}:")
+        print(f"[[TN, FP],\n [FN, TP]] = {matrix}")
+
+    # F1 Score, Precision, Recall per class dan average
+    f1 = f1_score(y_val, y_pred_binary, average='macro', zero_division=0)
+    precision = precision_score(y_val, y_pred_binary, average='macro', zero_division=0)
+    recall = recall_score(y_val, y_pred_binary, average='macro', zero_division=0)
+
+    print(f"\nMacro Average - Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f}")
+
+    f1_micro = f1_score(y_val, y_pred_binary, average='micro', zero_division=0)
+    precision_micro = precision_score(y_val, y_pred_binary, average='micro', zero_division=0)
+    recall_micro = recall_score(y_val, y_pred_binary, average='micro', zero_division=0)
+
+    print(f"Micro Average - Precision: {precision_micro:.4f}, Recall: {recall_micro:.4f}, F1 Score: {f1_micro:.4f}")
+
     model.save(MODEL_PATH)
     print("Model saved at", MODEL_PATH)
 
-    with open(os.path.join(BASE_DIR, "effect_classes.txt"), "w", encoding="utf-8") as f:
+    with open(EFFECT_CLASSES_FILE, "w", encoding="utf-8") as f:
         for c in EFFECT_CLASSES:
             f.write(c + "\n")
 
@@ -187,12 +171,12 @@ def run_training(source, epochs, batch_size, learning_rate):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train model ODAQ untuk pendeteksian efek audio dalam konteks listening pendidikan")
+    parser = argparse.ArgumentParser(description="Train model untuk pendeteksian efek audio dari dataset lokal")
     parser.add_argument("--epochs", type=int, default=100, help="Jumlah epoch")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
 
     args = parser.parse_args()
 
-    run_training("odaq", args.epochs, args.batch_size, args.learning_rate)
+    run_training(args.epochs, args.batch_size, args.learning_rate)
 
